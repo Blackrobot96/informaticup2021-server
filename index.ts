@@ -21,7 +21,7 @@ enum SpeedDirection {
     RIGHT = "right"
 }
 
-interface SpeedPlayer {
+class SpeedPlayer {
     x: number;
     y: number;
     direction: SpeedDirection;
@@ -29,7 +29,7 @@ interface SpeedPlayer {
     active: boolean;
 }
 
-interface SpeedData {
+class SpeedData {
     width: number;
     height: number;
     cells: number[][];
@@ -37,6 +37,11 @@ interface SpeedData {
     you: number;
     running: boolean;
     deadline: string;
+}
+
+interface ServerClients {
+    connection: any;
+    action: SpeedAction | null;
 }
 
 var clients = [];
@@ -55,151 +60,229 @@ var wsServer = new WebSocketServer({
     autoAcceptConnections: false
 });
 
-async function startGame() {
-    await delay(10000);
-    gameState.running = true;
-    sendRoundData();
-    while (gameState.running) {
-        await delay(3000);
-        processRound();
-        sendRoundData();
-    }
-}
-
-function sendRoundData() {
-    clients.forEach(function(client) {
-        client.emit('sendGameState');
-    });
-}
-
-let gameState: SpeedData = {
-    width: 50,
-    height: 50,
-    cells: initializeCells(50, 50),
-    players: {},
-    you: 0,
-    running: false,
-    deadline: "heute"
-}
-
-function initializeCells(width, height): number[][] {
-    let data = [];
-    for (let y = 0; y < height; y++) {
-        let row = [];
-        for (let x = 0; x < width; x++) {
-            row[x] = 0;
-        }
-        data[y] = row;
-    }
-    return data;
-}
-
-function addPlayer(): number {
-    let you = Object.keys(gameState.players).length + 1;
-    let x: number, y: number;
-
-    do {
-        x = Math.floor(Math.random() * Math.floor(gameState.width));
-        y = Math.floor(Math.random() * Math.floor(gameState.height));
-    } while (gameState.cells[y][x] !== 0)
-
-    gameState.cells[y][x] = you;
-    gameState.players[you] = {
-        x: x,
-        y: y,
-        direction: SpeedDirection.DOWN,
-        speed: 1,
-        active: true
-    }
-    return you;
-}
-
-function processAction(you: number, action: SpeedAction) {
-    switch (action) {
-        case SpeedAction.SPEED_UP: {
-            if (gameState.players[you].speed < 10)
-                gameState.players[you].speed++;
-            return true;
-        };
-        case SpeedAction.SLOW_DOWN: {
-            if (gameState.players[you].speed > 1)
-                gameState.players[you].speed--;
-            return true;
-        };
-        case SpeedAction.TURN_LEFT: {
-            switch (gameState.players[you].direction) {
-                case SpeedDirection.UP: { gameState.players[you].direction = SpeedDirection.LEFT }; break;
-                case SpeedDirection.LEFT: { gameState.players[you].direction = SpeedDirection.DOWN }; break;
-                case SpeedDirection.DOWN: { gameState.players[you].direction = SpeedDirection.RIGHT }; break;
-                case SpeedDirection.RIGHT: { gameState.players[you].direction = SpeedDirection.UP }; break;
-            }
-            return true;
-        };
-        case SpeedAction.TURN_RIGHT: {
-            switch (gameState.players[you].direction) {
-                case SpeedDirection.UP: { gameState.players[you].direction = SpeedDirection.RIGHT }; break;
-                case SpeedDirection.LEFT: { gameState.players[you].direction = SpeedDirection.UP }; break;
-                case SpeedDirection.DOWN: { gameState.players[you].direction = SpeedDirection.LEFT }; break;
-                case SpeedDirection.RIGHT: { gameState.players[you].direction = SpeedDirection.DOWN }; break;
-            }
-            return true;
-        };
-        case SpeedAction.NOTHING: {
-            return true;
-        };
-        default: return false;
-    }
-}
-
-function processRound() {
-    let running = false;
-    for (let playerKey in gameState.players) {
-        let player: SpeedPlayer = gameState.players[playerKey];
-        if (player.active) {
-            running = true;
-            for (let step = 0; step < player.speed; step++) {
-                switch (player.direction) {
-                    case SpeedDirection.UP: { player.y--; }; break;
-                    case SpeedDirection.DOWN: { player.y++; }; break;
-                    case SpeedDirection.LEFT: { player.x--; }; break;
-                    case SpeedDirection.RIGHT: { player.x++; }; break;
-                }
-                if (player.y < 0 || player.y >= gameState.height || player.x < 0 || player.x >= gameState.width || gameState.cells[player.y][player.x] !== 0) {
-                    player.active = false;
-                } else {
-                    gameState.cells[player.y][player.x] = Number.parseInt(playerKey);
-                }
-            }
-        }
-    }
-    gameState.running = running;
-}
-
+let currentGame: SpeedGame = null;
 wsServer.on('request', async function (request) {
+    if (currentGame == null || currentGame.isRunning)
+        currentGame = new SpeedGame();
     var connection = request.accept(null, null);
-    console.log((new Date()) + ' Connection accepted.');
-    
-    let you = addPlayer();
-    
-    connection.on('message', function (message) {
-        try {
-            let action: SpeedAnswer = JSON.parse(message.utf8Data);
-            console.log(action);
-            let valid = processAction(you, action.action);
-            if (!valid)
-                throw "Not a valid action!";
-        }
-        catch (ex) {
-            connection.drop(1007, ex);
-        }
-    });
-
-    connection.on('sendGameState', function() {
-        console.log("sendGameState");
-        let myState = gameState;
-        myState.you = you;
-        connection.send(JSON.stringify(myState));
-    });
-    clients.push(connection);
-    startGame();
+    currentGame.addPlayer(connection);
 });
+
+class ServerPlayer {
+    x: number;
+    y: number;
+    direction: SpeedDirection;
+    speed: number = 1;
+    active: boolean = true;
+    connection: any;
+    action: SpeedAction = null;
+
+    constructor(connection: any, x: number, y: number, direction: SpeedDirection) {
+        this.x = x;
+        this.y = y;
+        this.direction = direction;
+        this.connection = connection;
+    }
+
+    close() {
+        this.connection.close();
+    }
+
+    sendGameData(data) {
+        this.connection.send(JSON.stringify(data));
+    }
+
+    doAction(action: SpeedAction) {
+        this.action = action;
+        this.processAction();
+    }
+
+    private processAction() {
+        switch (this.action) {
+            case SpeedAction.SPEED_UP:
+                if (this.speed < 10)
+                    this.speed++;
+                break;
+
+            case SpeedAction.SLOW_DOWN:
+                if (this.speed > 1)
+                    this.speed--;
+                break;
+
+            case SpeedAction.TURN_LEFT:
+                switch (this.direction) {
+                    case SpeedDirection.UP: this.direction = SpeedDirection.LEFT; break;
+                    case SpeedDirection.LEFT: this.direction = SpeedDirection.DOWN; break;
+                    case SpeedDirection.DOWN: this.direction = SpeedDirection.RIGHT; break;
+                    case SpeedDirection.RIGHT: this.direction = SpeedDirection.UP; break;
+                }
+                break;
+
+            case SpeedAction.TURN_RIGHT:
+                switch (this.direction) {
+                    case SpeedDirection.UP: this.direction = SpeedDirection.RIGHT; break;
+                    case SpeedDirection.LEFT: this.direction = SpeedDirection.UP; break;
+                    case SpeedDirection.DOWN: this.direction = SpeedDirection.LEFT; break;
+                    case SpeedDirection.RIGHT: this.direction = SpeedDirection.DOWN; break;
+                }
+                break;
+            case SpeedAction.NOTHING:
+                break;
+        }
+    }
+}
+
+class SpeedGame {
+    players: ServerPlayer[] = [];
+    width: number = 50;
+    height: number = 50;
+    cells: number[][] = this.initializeCells(this.width, this.height);
+    isRunning: boolean = false;
+    jumpCounter = 0;
+
+    initializeCells(width, height): number[][] {
+        let data = [];
+        for (let y = 0; y < height; y++) {
+            let row = [];
+            for (let x = 0; x < width; x++) {
+                row[x] = 0;
+            }
+            data[y] = row;
+        }
+        return data;
+    }
+
+    closeGame() {
+        for (let i = 0; i < this.players.length; i++) {
+            let player = this.players[i];
+            let data = this.getGameData()
+            data.you = i+1;
+            player.sendGameData(data);
+            player.close();
+        }
+        this.cells = null;
+        this.players = null;
+        delete this.cells;
+        delete this.players;
+    }
+
+    addPlayer(connection): ServerPlayer {
+        if (this.isRunning)
+            return null;
+        let x: number, y: number;
+
+        do {
+            x = Math.floor(Math.random() * Math.floor(this.width));
+            y = Math.floor(Math.random() * Math.floor(this.height));
+        } while (this.cells[y][x] !== 0)
+
+        let player = new ServerPlayer(connection, x, y, SpeedDirection.DOWN)
+        let you = this.players.push(player) + 1;
+        let scope = this;
+        connection.on('message', function (message) {
+            try {
+                let action: SpeedAnswer = JSON.parse(message.utf8Data);
+                let valid = player.doAction(action.action);
+                scope.checkRoundAction();
+            }
+            catch (ex) {
+                connection.drop(1007, ex);
+                console.log(ex);
+            }
+        });
+
+        this.cells[y][x] = you;
+
+        if (this.players.length >= 2) {
+            this.isRunning = true;
+            for (let i = 0; i < this.players.length; i++) {
+                let player = this.players[i];
+                let data = this.getGameData()
+                data.you = i+1;
+                player.sendGameData(data);
+            }            
+        }
+    }
+
+    checkRoundAction() {
+        let allDone = true;
+        this.players.forEach(player => {
+            allDone = allDone && (player.active == false || player.action != null);
+        });
+
+        if(allDone)
+            this.processRound();
+    }
+    
+    processRound() {
+        this.jumpCounter = (this.jumpCounter + 1) % 6;
+        for (let i = 0; i < this.players.length; i++) {
+            let player = this.players[i];
+            if (player.active) {
+                player.action = null;
+                for (let step = 0; step < player.speed; step++) {
+                    
+                    switch (player.direction) {
+                        case SpeedDirection.UP: player.y--; break;
+                        case SpeedDirection.DOWN: player.y++; break;
+                        case SpeedDirection.LEFT: player.x--; break;
+                        case SpeedDirection.RIGHT: player.x++; break;
+                    }
+                    if (this.jumpCounter == 0 && step < player.speed - 2)
+                    {
+                        //jumping
+                    } else {
+                        if (player.y < 0 || player.y >= this.height || player.x < 0 || player.x >= this.width) {
+                            player.active = false;
+                        } else if (this.cells[player.y][player.x] !== 0){
+                            player.active = false;
+                            this.cells[player.y][player.x] = -1;
+                        } else {
+                            this.cells[player.y][player.x] = i+1;
+                        }
+                    }
+                }
+            }
+        }
+        let running = false;
+        this.players.forEach(player => {
+            if (player.active) {
+                if (this.cells[player.y][player.x] == -1){
+                    player.active = false;
+                } else
+                    running = true;
+            }
+        })
+        
+        for (let i = 0; i < this.players.length; i++) {
+            let player = this.players[i];
+            let data = this.getGameData()
+            data.you = i+1;
+            player.sendGameData(data);
+        }
+
+        if (running == false)
+            this.closeGame();
+    }
+
+    getGameData(): SpeedData {
+        let data = new SpeedData();
+        data.width = this.width;
+        data.height = this.height;
+        data.cells = this.cells;
+        data.players = {};
+        for (let i = 0; i < this.players.length; i++) {
+            let player = this.players[i];
+            let playerData = new SpeedPlayer();
+            playerData.active = player.active;
+            playerData.direction = player.direction;
+            playerData.x = player.x;
+            playerData.y = player.y;
+            playerData.speed = player.speed;
+            data.players[i+1] = playerData;
+        }
+        data.deadline = "heute";
+
+        return data;
+    }
+}
