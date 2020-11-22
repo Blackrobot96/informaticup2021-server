@@ -1,7 +1,7 @@
 const WebSocketServer = require('websocket').server;
 const http = require('http');
 const delay = ms => new Promise(res => setTimeout(res, ms));
-
+const AGENT_NUMBER = 8;
 interface SpeedAnswer {
     action: SpeedAction;
 }
@@ -175,8 +175,17 @@ class SpeedGame {
             x = Math.floor(Math.random() * Math.floor(this.width));
             y = Math.floor(Math.random() * Math.floor(this.height));
         } while (this.cells[y][x] !== 0)
+        
+        let dir: SpeedDirection;
+        switch (Math.floor(Math.random() * Math.floor(4))) {
+            case 1: dir = SpeedDirection.DOWN; break;
+            case 2: dir = SpeedDirection.UP; break;
+            case 3: dir = SpeedDirection.LEFT; break;
+            case 4: dir = SpeedDirection.RIGHT; break;
+            default: dir = SpeedDirection.DOWN; break;
+        }
 
-        let player = new ServerPlayer(connection, x, y, SpeedDirection.DOWN)
+        let player = new ServerPlayer(connection, x, y, dir)
         let you = this.players.push(player) + 1;
         let scope = this;
         connection.on('message', function (message) {
@@ -193,7 +202,7 @@ class SpeedGame {
 
         this.cells[y][x] = you;
 
-        if (this.players.length >= 2) {
+        if (this.players.length >= AGENT_NUMBER) {
             this.isRunning = true;
             for (let i = 0; i < this.players.length; i++) {
                 let player = this.players[i];
