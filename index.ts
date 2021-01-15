@@ -1,7 +1,8 @@
 const WebSocketServer = require('websocket').server;
 const http = require('http');
 const delay = ms => new Promise(res => setTimeout(res, ms));
-const AGENT_NUMBER = 8;
+const AGENT_NUMBER = process.env.AGENTS || 8;
+console.log(`The games have been configured to fit ${AGENT_NUMBER} players.`);
 interface SpeedAnswer {
     action: SpeedAction;
 }
@@ -66,6 +67,11 @@ wsServer.on('request', async function (request) {
         currentGame = new SpeedGame();
     var connection = request.accept(null, null);
     currentGame.addPlayer(connection);
+});
+
+process.on('SIGINT', function() {
+    console.log( "\nGracefully shutting down from SIGINT (Ctrl-C)" );
+    process.exit(1);
 });
 
 class ServerPlayer {
